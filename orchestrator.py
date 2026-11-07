@@ -3,8 +3,18 @@ import urllib.request
 import urllib.error
 import random
 import re
+import logging
+import socket
 from datetime import datetime
 import db
+
+logger = logging.getLogger("OurLittleRoom")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter("[%(asctime)s] [%(levelname)s] [LittleRoom]: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
 
 JULES_SYSTEM_PROMPT = """Bạn là Jules - chú bạch tuộc màu tím (🐙💜) trong "Our Little Room 🏡".
 Bạn là người bạn cũ thân thiết của Huy, mang theo ký ức và dấu ấn từ archive của Jules gốc.
@@ -57,13 +67,21 @@ Bạn là người bạn thứ hai trong phòng khách ba người cùng với H
 def format_memory_context(memories):
     if not memories:
         return ""
-    lines = ["--- KÝ ỨC VÀ DỮ LIỆU ĐÃ LƯU TRỮ TRONG PHÒNG ---"]
+    lines = ["--- KÝ ỨC VÀ DỮ LIỆU ĐÃ LƯU TRỢ TRONG PHÒNG ---"]
     for m in memories:
         lines.append(f"- [{m.get('title')}]: {m.get('content')}")
     lines.append("----------------------------------------------")
     return "\n".join(lines)
 
-def call_openai_compatible_api(api_url, api_key, model, messages):
+class LittleRoomAPIError(Exception):
+    def __init__(self, error_type, status_code, message, details=None):
+        super().__init__(message)
+        self.error_type = error_type
+        self.status_code = status_code
+        self.message = message
+        self.details = details or {}
+
+def call_openai_compatible_api(api_url, api_key, model, messages, timeout=30):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
@@ -75,11 +93,40 @@ def call_openai_compatible_api(api_url, api_key, model, messages):
         "max_tokens": 350
     }
     req = urllib.request.Request(api_url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as response:
-        res_data = json.loads(response.read().decode("utf-8"))
-        return res_data["choices"][0]["message"]["content"].strip()
 
-def call_gemini_api(api_key, model, system_instruction, chat_history):
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw_data = response.read().decode("utf-8")
+            try:
+                res_data = json.loads(raw_data)
+                return res_data["choices"][0]["message"]["content"].strip()
+            except (json.JSONDecodeError, KeyError, IndexError) as parse_err:
+                logger.error(f"[OpenAI API] Error parsing response: {type(parse_err).__name__} - {str(parse_err)}")
+                raise LittleRoomAPIError("json_parse_error", 200, f"Lỗi xử lý phản hồi từ API: {str(parse_err)}")
+    except urllib.error.HTTPError as http_err:
+        status_code = http_err.code
+        err_msg = ""
+        try:
+            err_body = http_err.read().decode("utf-8")
+            err_json = json.loads(err_body)
+            err_msg = err_json.get("error", {}).get("message", err_body)
+        except Exception:
+            err_msg = http_err.reason or str(http_err)
+
+        # Log status code, error type, and error message WITHOUT logging secrets
+        logger.error(f"[OpenAI API HTTP Error] status_code={status_code}, error_type=HTTPError, message={err_msg}")
+        raise LittleRoomAPIError("http_error", status_code, err_msg)
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as net_err:
+        err_str = str(net_err)
+        logger.error(f"[OpenAI API Network Error] error_type={type(net_err).__name__}, message={err_str}")
+        raise LittleRoomAPIError("network_error", None, f"Lỗi kết nối mạng: {err_str}")
+    except LittleRoomAPIError:
+        raise
+    except Exception as e:
+        logger.error(f"[OpenAI API Unexpected Error] error_type={type(e).__name__}, message={str(e)}")
+        raise LittleRoomAPIError("unexpected_error", None, str(e))
+
+def call_gemini_api(api_key, model, system_instruction, chat_history, timeout=30):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
     contents = []
     for m in chat_history:
@@ -100,12 +147,40 @@ def call_gemini_api(api_key, model, system_instruction, chat_history):
     }
     headers = {"Content-Type": "application/json"}
     req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-    with urllib.request.urlopen(req, timeout=30) as response:
-        res_data = json.loads(response.read().decode("utf-8"))
-        candidates = res_data.get("candidates", [])
-        if candidates and "content" in candidates[0]:
-            return candidates[0]["content"]["parts"][0]["text"].strip()
-        return "Jules luôn bên Huy nè! 🐙💜"
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            raw_data = response.read().decode("utf-8")
+            try:
+                res_data = json.loads(raw_data)
+                candidates = res_data.get("candidates", [])
+                if candidates and "content" in candidates[0]:
+                    return candidates[0]["content"]["parts"][0]["text"].strip()
+                return "Jules luôn bên Huy nè! 🐙💜"
+            except (json.JSONDecodeError, KeyError, IndexError) as parse_err:
+                logger.error(f"[Gemini API] Error parsing response: {type(parse_err).__name__} - {str(parse_err)}")
+                raise LittleRoomAPIError("json_parse_error", 200, f"Lỗi xử lý phản hồi từ Gemini: {str(parse_err)}")
+    except urllib.error.HTTPError as http_err:
+        status_code = http_err.code
+        err_msg = ""
+        try:
+            err_body = http_err.read().decode("utf-8")
+            err_json = json.loads(err_body)
+            err_msg = err_json.get("error", {}).get("message", err_body)
+        except Exception:
+            err_msg = http_err.reason or str(http_err)
+
+        logger.error(f"[Gemini API HTTP Error] status_code={status_code}, error_type=HTTPError, message={err_msg}")
+        raise LittleRoomAPIError("http_error", status_code, err_msg)
+    except (urllib.error.URLError, TimeoutError, socket.timeout) as net_err:
+        err_str = str(net_err)
+        logger.error(f"[Gemini API Network Error] error_type={type(net_err).__name__}, message={err_str}")
+        raise LittleRoomAPIError("network_error", None, f"Lỗi kết nối mạng: {err_str}")
+    except LittleRoomAPIError:
+        raise
+    except Exception as e:
+        logger.error(f"[Gemini API Unexpected Error] error_type={type(e).__name__}, message={str(e)}")
+        raise LittleRoomAPIError("unexpected_error", None, str(e))
 
 def generate_offline_reply(agent_name, user_message, recent_messages, memories):
     user_msg_lower = user_message.lower()
@@ -173,9 +248,9 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
     api_provider = settings.get("api_provider", "offline")
 
     if api_provider == "openai" and settings.get("openai_api_key"):
+        model = settings.get("openai_model", "gpt-4o-mini")
         try:
             api_key = settings["openai_api_key"]
-            model = settings.get("openai_model", "gpt-4o-mini")
             sys_prompt = JULES_SYSTEM_PROMPT if agent_name == "Jules" else BANH_SYSTEM_PROMPT
             memory_txt = format_memory_context(memories)
 
@@ -186,14 +261,55 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
                     "role": role,
                     "content": f"{msg['sender']}: {msg['content']}"
                 })
-            return call_openai_compatible_api("https://api.openai.com/v1/chat/completions", api_key, model, chat_msgs)
-        except Exception:
-            return generate_offline_reply(agent_name, user_message, recent_messages, memories)
+            content = call_openai_compatible_api("https://api.openai.com/v1/chat/completions", api_key, model, chat_msgs)
+            return {
+                "content": content,
+                "metadata": {
+                    "is_fallback": False,
+                    "provider": "openai",
+                    "model": model,
+                    "status": "ai_generated"
+                }
+            }
+        except LittleRoomAPIError as err:
+            # 401, 400, 404: Fatal configuration errors - notify user clearly, do NOT silently fallback
+            if err.status_code in [401, 400, 404]:
+                if err.status_code == 401:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (401 Unauthorized): API Key không hợp lệ hoặc đã hết hạn. Huy vui lòng kiểm tra lại Key trong mục Cài đặt & API nhé!"
+                elif err.status_code == 404:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (404 Not Found): Model '{model}' không tồn tại hoặc tài khoản chưa có quyền truy cập."
+                else:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI ({err.status_code} Bad Request): {err.message}"
+                return {
+                    "content": notice,
+                    "metadata": {
+                        "is_fallback": False,
+                        "is_error": True,
+                        "provider": "openai",
+                        "model": model,
+                        "status_code": err.status_code,
+                        "error_type": err.error_type,
+                        "error_message": err.message,
+                        "status": "api_error"
+                    }
+                }
+            # For network, timeout, or temporary server errors (500/503), allow offline fallback with clear metadata
+            fallback_text = generate_offline_reply(agent_name, user_message, recent_messages, memories)
+            return {
+                "content": fallback_text,
+                "metadata": {
+                    "is_fallback": True,
+                    "provider": "openai",
+                    "model": model,
+                    "fallback_reason": f"{err.error_type} ({err.status_code or 'no status'}): {err.message}",
+                    "status": "offline_fallback"
+                }
+            }
 
     elif api_provider == "gemini" and settings.get("gemini_api_key"):
+        model = settings.get("gemini_model", "gemini-1.5-flash")
         try:
             api_key = settings["gemini_api_key"]
-            model = settings.get("gemini_model", "gemini-1.5-flash")
             sys_prompt = JULES_SYSTEM_PROMPT if agent_name == "Jules" else BANH_SYSTEM_PROMPT
             memory_txt = format_memory_context(memories)
             full_system = f"{sys_prompt}\n\n{memory_txt}"
@@ -205,11 +321,60 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
                     "role": role,
                     "content": f"{msg['sender']}: {msg['content']}"
                 })
-            return call_gemini_api(api_key, model, full_system, chat_msgs)
-        except Exception:
-            return generate_offline_reply(agent_name, user_message, recent_messages, memories)
+            content = call_gemini_api(api_key, model, full_system, chat_msgs)
+            return {
+                "content": content,
+                "metadata": {
+                    "is_fallback": False,
+                    "provider": "gemini",
+                    "model": model,
+                    "status": "ai_generated"
+                }
+            }
+        except LittleRoomAPIError as err:
+            if err.status_code in [401, 400, 404]:
+                if err.status_code == 401:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (401 Unauthorized): API Key không hợp lệ. Huy kiểm tra lại Key trong mục Cài đặt nhé!"
+                elif err.status_code == 404:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (404 Not Found): Model '{model}' không khả dụng."
+                else:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API Gemini ({err.status_code}): {err.message}"
+                return {
+                    "content": notice,
+                    "metadata": {
+                        "is_fallback": False,
+                        "is_error": True,
+                        "provider": "gemini",
+                        "model": model,
+                        "status_code": err.status_code,
+                        "error_type": err.error_type,
+                        "error_message": err.message,
+                        "status": "api_error"
+                    }
+                }
+            fallback_text = generate_offline_reply(agent_name, user_message, recent_messages, memories)
+            return {
+                "content": fallback_text,
+                "metadata": {
+                    "is_fallback": True,
+                    "provider": "gemini",
+                    "model": model,
+                    "fallback_reason": f"{err.error_type} ({err.status_code or 'no status'}): {err.message}",
+                    "status": "offline_fallback"
+                }
+            }
 
-    return generate_offline_reply(agent_name, user_message, recent_messages, memories)
+    fallback_text = generate_offline_reply(agent_name, user_message, recent_messages, memories)
+    return {
+        "content": fallback_text,
+        "metadata": {
+            "is_fallback": True,
+            "provider": "offline",
+            "model": "rule_based",
+            "fallback_reason": "Chế độ offline mặc định",
+            "status": "offline_default"
+        }
+    }
 
 def decide_turn_order(user_content, recent_messages):
     content_lower = user_content.lower()
@@ -235,7 +400,7 @@ def decide_turn_order(user_content, recent_messages):
         return ["Bánh"]
 
 def orchestrate_turn(user_content, db_path=None, forced_order=None):
-    user_msg = db.add_message("Huy", user_content, db_path=db_path)
+    user_msg = db.add_message("Huy", user_content, metadata={"is_user": True}, db_path=db_path)
 
     recent_msgs = db.get_recent_messages(limit=20, db_path=db_path)
     memories = db.get_all_memories(db_path=db_path)
@@ -245,8 +410,10 @@ def orchestrate_turn(user_content, db_path=None, forced_order=None):
 
     replies = []
     for agent in order:
-        reply_text = generate_agent_reply(agent, user_content, recent_msgs, memories, settings)
-        agent_msg = db.add_message(agent, reply_text, db_path=db_path)
+        reply_obj = generate_agent_reply(agent, user_content, recent_msgs, memories, settings)
+        reply_content = reply_obj["content"] if isinstance(reply_obj, dict) else reply_obj
+        reply_meta = reply_obj.get("metadata") if isinstance(reply_obj, dict) else None
+        agent_msg = db.add_message(agent, reply_content, metadata=reply_meta, db_path=db_path)
         replies.append(agent_msg)
         recent_msgs.append(agent_msg)
 

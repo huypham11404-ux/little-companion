@@ -22,9 +22,16 @@ def init_db(db_path=None):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sender TEXT NOT NULL,
             content TEXT NOT NULL,
-            timestamp TEXT NOT NULL
+            timestamp TEXT NOT NULL,
+            metadata TEXT
         )
     """)
+
+    # Check if metadata column exists (for backward compatibility if table already existed)
+    cursor.execute("PRAGMA table_info(messages)")
+    columns = [row["name"] for row in cursor.fetchall()]
+    if "metadata" not in columns:
+        cursor.execute("ALTER TABLE messages ADD COLUMN metadata TEXT")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS memories (
@@ -50,20 +57,23 @@ def init_db(db_path=None):
     cursor.execute("SELECT COUNT(*) as cnt FROM messages")
     if cursor.fetchone()["cnt"] == 0:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        welcome_meta = json.dumps({"is_fallback": False, "provider": "system", "model": "welcome"}, ensure_ascii=False)
         cursor.execute(
-            "INSERT INTO messages (sender, content, timestamp) VALUES (?, ?, ?)",
+            "INSERT INTO messages (sender, content, timestamp, metadata) VALUES (?, ?, ?, ?)",
             (
                 "Jules",
                 "Huy ơiiiii! Chào mừng Huy đến với Our Little Room 🏡🐙💜! Jules và Bánh đã dọn vào phòng mới rồi nè, từ giờ tụi mình sẽ luôn ở đây tâm sự cùng Huy bất cứ lúc nào nha!",
-                now
+                now,
+                welcome_meta
             )
         )
         cursor.execute(
-            "INSERT INTO messages (sender, content, timestamp) VALUES (?, ?, ?)",
+            "INSERT INTO messages (sender, content, timestamp, metadata) VALUES (?, ?, ?, ?)",
             (
                 "Bánh",
                 "Chào Huy ✨ Bánh cũng đã có mặt ở đây rồi nè. Căn phòng này ấm cúng quá! Giờ thì mọi câu chuyện, từ con DAW của Huy cho tới chuyện thường ngày, tụi mình đều sẽ lắng nghe và cùng Huy chia sẻ nhé 🤍",
-                now
+                now,
+                welcome_meta
             )
         )
 
@@ -103,27 +113,49 @@ def seed_default_memories(cursor):
         initial_memories
     )
 
-def add_message(sender, content, timestamp=None, db_path=None):
+def add_message(sender, content, timestamp=None, metadata=None, db_path=None):
     if not timestamp:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    meta_json = None
+    if metadata is not None:
+        if isinstance(metadata, str):
+            meta_json = metadata
+        else:
+            meta_json = json.dumps(metadata, ensure_ascii=False)
     conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO messages (sender, content, timestamp) VALUES (?, ?, ?)",
-        (sender, content, timestamp)
+        "INSERT INTO messages (sender, content, timestamp, metadata) VALUES (?, ?, ?, ?)",
+        (sender, content, timestamp, meta_json)
     )
     conn.commit()
     msg_id = cursor.lastrowid
     conn.close()
-    return {"id": msg_id, "sender": sender, "content": content, "timestamp": timestamp}
+    parsed_meta = metadata if isinstance(metadata, dict) else (json.loads(meta_json) if meta_json else None)
+    return {
+        "id": msg_id,
+        "sender": sender,
+        "content": content,
+        "timestamp": timestamp,
+        "metadata": parsed_meta
+    }
 
 def get_recent_messages(limit=50, db_path=None):
     conn = get_connection(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, sender, content, timestamp FROM messages ORDER BY id DESC LIMIT ?", (limit,))
+    cursor.execute("SELECT id, sender, content, timestamp, metadata FROM messages ORDER BY id DESC LIMIT ?", (limit,))
     rows = cursor.fetchall()
     conn.close()
-    return [dict(r) for r in reversed(rows)]
+    messages = []
+    for r in reversed(rows):
+        d = dict(r)
+        if d.get("metadata"):
+            try:
+                d["metadata"] = json.loads(d["metadata"])
+            except Exception:
+                pass
+        messages.append(d)
+    return messages
 
 def get_all_memories(db_path=None):
     conn = get_connection(db_path)

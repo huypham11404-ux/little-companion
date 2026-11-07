@@ -89,9 +89,36 @@ body {
 .message-item.huy .message-bubble { background-color: var(--accent-huy-bg); border-color: rgba(245, 158, 11, 0.3); }
 .message-item.jules .message-bubble { background-color: var(--accent-jules-bg); border-color: rgba(168, 85, 247, 0.3); }
 .message-item.banh .message-bubble { background-color: var(--accent-banh-bg); border-color: rgba(56, 189, 248, 0.3); }
-.message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.message-item.has-error .message-bubble { background-color: #451a1a; border-color: rgba(239, 68, 68, 0.4); }
+.message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
 .message-sender { font-size: 0.8rem; font-weight: 700; }
 .message-time { font-size: 0.7rem; color: var(--text-muted); }
+
+/* Status badges for messages */
+.status-badge {
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.status-badge.ai {
+  background-color: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+.status-badge.offline {
+  background-color: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+.status-badge.error {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
 
 .typing-indicator { padding: 6px 24px; display: flex; align-items: center; gap: 10px; font-size: 0.8rem; color: var(--text-muted); }
 .typing-dots { display: flex; gap: 4px; }

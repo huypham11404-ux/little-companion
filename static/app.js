@@ -45,7 +45,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const tempUserMsg = {
       sender: "Huy",
       content: content,
-      timestamp: formatTime(new Date())
+      timestamp: formatTime(new Date()),
+      metadata: { is_user: true }
     };
     appendMessage(tempUserMsg);
     scrollToBottom();
@@ -78,7 +79,8 @@ document.addEventListener("DOMContentLoaded", () => {
       appendMessage({
         sender: "System",
         content: "Không thể kết nối đến phòng. Hãy kiểm tra server nha!",
-        timestamp: formatTime(new Date())
+        timestamp: formatTime(new Date()),
+        metadata: { is_error: true }
       });
     } finally {
       btnSend.disabled = false;
@@ -103,12 +105,28 @@ document.addEventListener("DOMContentLoaded", () => {
   function appendMessage(msg) {
     const item = document.createElement("div");
     const senderLower = msg.sender.toLowerCase();
-    item.className = `message-item ${senderLower}`;
+    const isError = msg.metadata && (msg.metadata.is_error || msg.metadata.status === "api_error");
+    item.className = `message-item ${senderLower} ${isError ? "has-error" : ""}`;
 
     let avatar = "💬";
     if (senderLower === "huy") avatar = "✨";
     else if (senderLower === "jules") avatar = "🐙";
     else if (senderLower === "banh" || senderLower === "bánh") avatar = "🤍";
+    else if (senderLower === "system") avatar = "⚠️";
+
+    // Build badge HTML based on metadata
+    let badgeHtml = "";
+    if (msg.metadata && senderLower !== "huy") {
+      const meta = msg.metadata;
+      if (meta.is_error || meta.status === "api_error") {
+        badgeHtml = `<span class="status-badge error" title="${escapeHtml(meta.error_message || '')}">❌ API Error (${meta.status_code || 'Lỗi'})</span>`;
+      } else if (meta.is_fallback) {
+        const reason = meta.fallback_reason ? ` title="${escapeHtml(meta.fallback_reason)}"` : "";
+        badgeHtml = `<span class="status-badge offline"${reason}>⚡ Offline fallback</span>`;
+      } else if (meta.provider && meta.provider !== "offline" && meta.provider !== "system") {
+        badgeHtml = `<span class="status-badge ai">✨ AI (${meta.provider}: ${meta.model || 'model'})</span>`;
+      }
+    }
 
     item.innerHTML = `
       <div class="message-avatar">${avatar}</div>
@@ -116,6 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
         <div class="message-meta">
           <span class="message-sender">${escapeHtml(msg.sender)}</span>
           <span class="message-time">${escapeHtml(msg.timestamp || "")}</span>
+          ${badgeHtml}
         </div>
         <div class="message-text">${escapeHtml(msg.content)}</div>
       </div>

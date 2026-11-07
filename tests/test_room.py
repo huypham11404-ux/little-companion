@@ -2,10 +2,14 @@ import unittest
 import os
 import tempfile
 import urllib.request
+import urllib.error
+import io
 import json
 import threading
 import time
 import socketserver
+import logging
+from unittest.mock import patch, MagicMock
 import db
 import orchestrator
 import server
@@ -34,13 +38,16 @@ class TestOurLittleRoom(unittest.TestCase):
         self.assertIn("jules_archive", categories)
         self.assertIn("banh_notes", categories)
 
-    def test_message_addition(self):
-        msg = db.add_message("Huy", "Chào hai bạn!", db_path=self.db_path)
+    def test_message_addition_with_metadata(self):
+        meta = {"is_fallback": True, "provider": "offline", "status": "offline_default"}
+        msg = db.add_message("Huy", "Chào hai bạn!", metadata=meta, db_path=self.db_path)
         self.assertEqual(msg["sender"], "Huy")
         self.assertEqual(msg["content"], "Chào hai bạn!")
+        self.assertEqual(msg["metadata"]["provider"], "offline")
 
         recent = db.get_recent_messages(limit=5, db_path=self.db_path)
         self.assertEqual(recent[-1]["content"], "Chào hai bạn!")
+        self.assertEqual(recent[-1]["metadata"]["provider"], "offline")
 
     def test_memory_crud(self):
         saved = db.save_memory("daw_notes", "DSP Filter", "Biquad filter idea", db_path=self.db_path)
@@ -77,13 +84,15 @@ class TestOurLittleRoom(unittest.TestCase):
         order_random = orchestrator.decide_turn_order("Hôm nay trời đẹp ghê", [])
         self.assertTrue(len(order_random) in [1, 2])
 
-    def test_orchestrator_turn(self):
+    def test_orchestrator_turn_offline(self):
         res = orchestrator.orchestrate_turn("Ý tưởng DAW mới của tớ nè!", db_path=self.db_path)
         self.assertEqual(res["user_message"]["sender"], "Huy")
         self.assertGreaterEqual(len(res["agent_replies"]), 1)
         for reply in res["agent_replies"]:
             self.assertIn(reply["sender"], ["Jules", "Bánh"])
             self.assertTrue(len(reply["content"]) > 0)
+            self.assertTrue(reply["metadata"]["is_fallback"])
+            self.assertEqual(reply["metadata"]["provider"], "offline")
 
     def test_generate_offline_replies(self):
         reply_daw = orchestrator.generate_offline_reply("Jules", "Dự án DAW của mình", [], [])
@@ -96,6 +105,128 @@ class TestOurLittleRoom(unittest.TestCase):
         self.assertTrue(any(w in reply_sad.lower() for w in ["xúc tu", "thương", "ghế", "little room", "tâm sự"]))
 
 
+class TestAPIErrorHandlingAndClassification(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "test_err_room.db")
+        db.init_db(self.db_path)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @patch("urllib.request.urlopen")
+    def test_openai_success(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = json.dumps({
+            "choices": [{"message": {"content": "Chào Huy nhé, con DAW đỉnh chóp luôn! 🐙"}}]
+        }).encode("utf-8")
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        settings = {
+            "api_provider": "openai",
+            "openai_api_key": "sk-real-key-test",
+            "openai_model": "gpt-4o-mini"
+        }
+        res = orchestrator.generate_agent_reply("Jules", "Chào Jules", [], [], settings)
+        self.assertIn("con DAW đỉnh chóp", res["content"])
+        self.assertFalse(res["metadata"]["is_fallback"])
+        self.assertEqual(res["metadata"]["provider"], "openai")
+        self.assertEqual(res["metadata"]["model"], "gpt-4o-mini")
+        self.assertEqual(res["metadata"]["status"], "ai_generated")
+
+    @patch("urllib.request.urlopen")
+    def test_openai_401_unauthorized(self, mock_urlopen):
+        err_body = json.dumps({
+            "error": {"message": "Incorrect API key provided: sk-invalid...", "type": "invalid_request_error"}
+        }).encode("utf-8")
+        fp = io.BytesIO(err_body)
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.openai.com/v1/chat/completions",
+            code=401,
+            msg="Unauthorized",
+            hdrs={},
+            fp=fp
+        )
+
+        settings = {
+            "api_provider": "openai",
+            "openai_api_key": "sk-invalid-key-secret-12345",
+            "openai_model": "gpt-4o-mini"
+        }
+
+        # Test with log capture to ensure secret is NOT logged
+        with self.assertLogs("OurLittleRoom", level="ERROR") as cm:
+            res = orchestrator.generate_agent_reply("Jules", "Chào Jules", [], [], settings)
+            log_output = "\n".join(cm.output)
+            self.assertIn("status_code=401", log_output)
+            self.assertNotIn("sk-invalid-key-secret-12345", log_output)
+
+        # 401 must NOT fall back silently, but return explicit error message
+        self.assertIn("401 Unauthorized", res["content"])
+        self.assertIn("API Key không hợp lệ", res["content"])
+        self.assertFalse(res["metadata"]["is_fallback"])
+        self.assertTrue(res["metadata"]["is_error"])
+        self.assertEqual(res["metadata"]["status_code"], 401)
+        self.assertEqual(res["metadata"]["status"], "api_error")
+
+    @patch("urllib.request.urlopen")
+    def test_openai_404_not_found(self, mock_urlopen):
+        err_body = json.dumps({
+            "error": {"message": "The model `gpt-non-existent` does not exist", "type": "invalid_request_error"}
+        }).encode("utf-8")
+        fp = io.BytesIO(err_body)
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.openai.com/v1/chat/completions",
+            code=404,
+            msg="Not Found",
+            hdrs={},
+            fp=fp
+        )
+
+        settings = {
+            "api_provider": "openai",
+            "openai_api_key": "sk-test",
+            "openai_model": "gpt-non-existent"
+        }
+        res = orchestrator.generate_agent_reply("Bánh", "Chào Bánh", [], [], settings)
+        self.assertIn("404 Not Found", res["content"])
+        self.assertIn("gpt-non-existent", res["content"])
+        self.assertFalse(res["metadata"]["is_fallback"])
+        self.assertEqual(res["metadata"]["status_code"], 404)
+
+    @patch("urllib.request.urlopen")
+    def test_openai_network_timeout_fallback(self, mock_urlopen):
+        mock_urlopen.side_effect = TimeoutError("Connection timed out after 30 seconds")
+
+        settings = {
+            "api_provider": "openai",
+            "openai_api_key": "sk-test",
+            "openai_model": "gpt-4o-mini"
+        }
+        res = orchestrator.generate_agent_reply("Jules", "Ý tưởng DAW", [], [], settings)
+        # Should fallback to offline reply gracefully with metadata
+        self.assertTrue(res["metadata"]["is_fallback"])
+        self.assertEqual(res["metadata"]["status"], "offline_fallback")
+        self.assertIn("network_error", res["metadata"]["fallback_reason"])
+        self.assertTrue(len(res["content"]) > 0)
+
+    @patch("urllib.request.urlopen")
+    def test_openai_json_parse_error_fallback(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"<html>502 Bad Gateway</html>"
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        settings = {
+            "api_provider": "openai",
+            "openai_api_key": "sk-test",
+            "openai_model": "gpt-4o-mini"
+        }
+        res = orchestrator.generate_agent_reply("Bánh", "Chào Bánh", [], [], settings)
+        self.assertTrue(res["metadata"]["is_fallback"])
+        self.assertEqual(res["metadata"]["status"], "offline_fallback")
+        self.assertIn("json_parse_error", res["metadata"]["fallback_reason"])
+
+
 class TestServerAPI(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -104,7 +235,7 @@ class TestServerAPI(unittest.TestCase):
         os.environ["ROOM_DB_PATH"] = cls.test_db_path
         db.init_db(cls.test_db_path)
 
-        cls.port = 18080
+        cls.port = 18081
         socketserver.TCPServer.allow_reuse_address = True
         cls.httpd = socketserver.TCPServer(("127.0.0.1", cls.port), server.LittleRoomHandler)
         cls.server_thread = threading.Thread(target=cls.httpd.serve_forever)
@@ -148,6 +279,7 @@ class TestServerAPI(unittest.TestCase):
             self.assertEqual(data["user_message"]["sender"], "Huy")
             self.assertEqual(len(data["agent_replies"]), 1)
             self.assertEqual(data["agent_replies"][0]["sender"], "Jules")
+            self.assertIsNotNone(data["agent_replies"][0].get("metadata"))
 
     def test_api_post_memories(self):
         payload = json.dumps({
