@@ -272,14 +272,18 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
                 }
             }
         except LittleRoomAPIError as err:
-            # 401, 400, 404: Fatal configuration errors - notify user clearly, do NOT silently fallback
-            if err.status_code in [401, 400, 404]:
+            # Check for client error status codes (4xx: 400, 401, 403, 404, 429...)
+            if err.status_code and 400 <= err.status_code < 500:
                 if err.status_code == 401:
                     notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (401 Unauthorized): API Key không hợp lệ hoặc đã hết hạn. Huy vui lòng kiểm tra lại Key trong mục Cài đặt & API nhé!"
+                elif err.status_code == 429:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (429 Rate Limit / Quota Exceeded): Tài khoản OpenAI đã vượt quá hạn ngạch (hết credit hoặc cần nạp thêm credit vào tài khoản). Chi tiết: {err.message}"
+                elif err.status_code == 403:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (403 Forbidden): Không có quyền truy cập hoặc bị giới hạn vùng địa lý/tài khoản."
                 elif err.status_code == 404:
                     notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (404 Not Found): Model '{model}' không tồn tại hoặc tài khoản chưa có quyền truy cập."
                 else:
-                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI ({err.status_code} Bad Request): {err.message}"
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI ({err.status_code} Client Error): {err.message}"
                 return {
                     "content": notice,
                     "metadata": {
@@ -332,9 +336,11 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
                 }
             }
         except LittleRoomAPIError as err:
-            if err.status_code in [401, 400, 404]:
+            if err.status_code and 400 <= err.status_code < 500:
                 if err.status_code == 401:
                     notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (401 Unauthorized): API Key không hợp lệ. Huy kiểm tra lại Key trong mục Cài đặt nhé!"
+                elif err.status_code == 429:
+                    notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (429 Quota Exceeded): Vượt quá hạn ngạch gọi API Gemini."
                 elif err.status_code == 404:
                     notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (404 Not Found): Model '{model}' không khả dụng."
                 else:

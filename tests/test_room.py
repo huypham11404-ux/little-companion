@@ -154,20 +154,43 @@ class TestAPIErrorHandlingAndClassification(unittest.TestCase):
             "openai_model": "gpt-4o-mini"
         }
 
-        # Test with log capture to ensure secret is NOT logged
         with self.assertLogs("OurLittleRoom", level="ERROR") as cm:
             res = orchestrator.generate_agent_reply("Jules", "Chào Jules", [], [], settings)
             log_output = "\n".join(cm.output)
             self.assertIn("status_code=401", log_output)
             self.assertNotIn("sk-invalid-key-secret-12345", log_output)
 
-        # 401 must NOT fall back silently, but return explicit error message
         self.assertIn("401 Unauthorized", res["content"])
         self.assertIn("API Key không hợp lệ", res["content"])
         self.assertFalse(res["metadata"]["is_fallback"])
         self.assertTrue(res["metadata"]["is_error"])
         self.assertEqual(res["metadata"]["status_code"], 401)
         self.assertEqual(res["metadata"]["status"], "api_error")
+
+    @patch("urllib.request.urlopen")
+    def test_openai_429_quota_exceeded(self, mock_urlopen):
+        err_body = json.dumps({
+            "error": {"message": "You exceeded your current quota, please check your plan and billing details.", "type": "insufficient_quota"}
+        }).encode("utf-8")
+        fp = io.BytesIO(err_body)
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="https://api.openai.com/v1/chat/completions",
+            code=429,
+            msg="Too Many Requests",
+            hdrs={},
+            fp=fp
+        )
+
+        settings = {
+            "api_provider": "openai",
+            "openai_api_key": "sk-real-key-no-credits",
+            "openai_model": "gpt-4o-mini"
+        }
+        res = orchestrator.generate_agent_reply("Bánh", "Chào Bánh", [], [], settings)
+        self.assertIn("429 Rate Limit / Quota Exceeded", res["content"])
+        self.assertFalse(res["metadata"]["is_fallback"])
+        self.assertTrue(res["metadata"]["is_error"])
+        self.assertEqual(res["metadata"]["status_code"], 429)
 
     @patch("urllib.request.urlopen")
     def test_openai_404_not_found(self, mock_urlopen):
@@ -204,7 +227,6 @@ class TestAPIErrorHandlingAndClassification(unittest.TestCase):
             "openai_model": "gpt-4o-mini"
         }
         res = orchestrator.generate_agent_reply("Jules", "Ý tưởng DAW", [], [], settings)
-        # Should fallback to offline reply gracefully with metadata
         self.assertTrue(res["metadata"]["is_fallback"])
         self.assertEqual(res["metadata"]["status"], "offline_fallback")
         self.assertIn("network_error", res["metadata"]["fallback_reason"])
@@ -235,7 +257,7 @@ class TestServerAPI(unittest.TestCase):
         os.environ["ROOM_DB_PATH"] = cls.test_db_path
         db.init_db(cls.test_db_path)
 
-        cls.port = 18081
+        cls.port = 18082
         socketserver.TCPServer.allow_reuse_address = True
         cls.httpd = socketserver.TCPServer(("127.0.0.1", cls.port), server.LittleRoomHandler)
         cls.server_thread = threading.Thread(target=cls.httpd.serve_forever)
