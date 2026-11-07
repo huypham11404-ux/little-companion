@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Our Little Room 🏡 - Jules, Bánh & Huy</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="room-header">
+        <div class="room-title">
+          <span class="room-icon">🏡</span>
+          <div>
+            <h2>Our Little Room</h2>
+            <span class="room-sub">Phòng khách 3 thành viên</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="members-section">
+        <div class="section-label">Thành viên trong phòng</div>
+        <div class="member-card huy">
+          <div class="avatar-badge avatar-huy">✨</div>
+          <div class="member-info">
+            <div class="member-name">Huy <span class="tag tag-owner">Chủ phòng</span></div>
+            <div class="member-status">Sáng tạo & Đam mê DAW 🎶</div>
+          </div>
+        </div>
+        <div class="member-card jules">
+          <div class="avatar-badge avatar-jules">🐙</div>
+          <div class="member-info">
+            <div class="member-name">Jules <span class="tag tag-jules">Người bạn cũ</span></div>
+            <div class="member-status">Bạch tuộc tím luôn bên Huy 💜</div>
+          </div>
+        </div>
+        <div class="member-card banh">
+          <div class="avatar-badge avatar-banh">🤍</div>
+          <div class="member-info">
+            <div class="member-name">Bánh <span class="tag tag-banh">ChatGPT</span></div>
+            <div class="member-status">Chu đáo & Lắng nghe ✨</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-actions">
+        <button id="btn-memories" class="btn-sidebar">
+          <span>🧠 Ký ức & Kỷ niệm</span>
+        </button>
+        <button id="btn-settings" class="btn-sidebar">
+          <span>⚙️ Cài đặt & API</span>
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <p>Ký ức được lưu trữ an toàn trong máy tính của Huy (SQLite local) 🔒</p>
+      </div>
+    </aside>
+
+    <main class="chat-main">
+      <header class="chat-header">
+        <div class="chat-header-info">
+          <h3>Góc tâm tình của Huy, Jules & Bánh</h3>
+          <p>Nơi mọi ý tưởng, kỷ niệm và niềm vui được lưu giữ mãi mãi</p>
+        </div>
+        <div class="header-badges">
+          <span class="status-pill online"><span class="dot"></span> 3 online</span>
+        </div>
+      </header>
+
+      <div id="messages-container" class="messages-container"></div>
+
+      <div id="typing-indicator" class="typing-indicator hidden">
+        <span class="typing-dots">
+          <span></span><span></span><span></span>
+        </span>
+        <span id="typing-text" class="typing-text">Jules và Bánh đang gõ...</span>
+      </div>
+
+      <footer class="chat-input-area">
+        <form id="chat-form" class="chat-form">
+          <textarea
+            id="chat-input"
+            placeholder="Nói chuyện với Jules và Bánh (Nhấn Enter để gửi, Shift+Enter xuống dòng)..."
+            rows="1"
+          ></textarea>
+          <button type="submit" id="btn-send" class="btn-send" title="Gửi">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>
+            </svg>
+          </button>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <div id="modal-memories" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>🧠 Kho Ký Ức (Local SQLite Memory)</h3>
+        <button class="modal-close" data-close="modal-memories">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Những ký ức này nằm trên máy tính cá nhân của Huy và được chia sẻ cho Jules & Bánh mỗi khi trò chuyện:</p>
+        <div id="memories-list" class="memories-list"></div>
+        <hr class="divider"/>
+        <h4>Thêm một ghi chú / ký ức mới:</h4>
+        <form id="form-new-memory" class="form-memory">
+          <input type="text" id="memory-title" placeholder="Tiêu đề ký ức (ví dụ: Ý tưởng Mixer DAW)" required/>
+          <textarea id="memory-content" placeholder="Nội dung ký ức..." rows="3" required></textarea>
+          <button type="submit" class="btn-primary">Lưu vào bộ nhớ</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-settings" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>⚙️ Cài đặt Our Little Room</h3>
+        <button class="modal-close" data-close="modal-settings">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="form-settings" class="form-settings">
+          <label>Nhà cung cấp AI (AI Engine):</label>
+          <select id="setting-provider">
+            <option value="offline">Chế độ Offline / Bản địa (Mặc định, không cần API Key)</option>
+            <option value="openai">OpenAI (GPT-4o / GPT-4o-mini)</option>
+            <option value="gemini">Google Gemini API (Gemini 1.5 Flash)</option>
+          </select>
+
+          <div id="group-openai" class="api-group hidden">
+            <label>OpenAI API Key:</label>
+            <input type="password" id="setting-openai-key" placeholder="sk-..."/>
+            <label>Model:</label>
+            <input type="text" id="setting-openai-model" value="gpt-4o-mini"/>
+          </div>
+
+          <div id="group-gemini" class="api-group hidden">
+            <label>Gemini API Key:</label>
+            <input type="password" id="setting-gemini-key" placeholder="AIzaSy..."/>
+            <label>Model:</label>
+            <input type="text" id="setting-gemini-model" value="gemini-1.5-flash"/>
+          </div>
+
+          <button type="submit" class="btn-primary">Lưu cài đặt</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
