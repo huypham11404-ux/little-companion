@@ -127,7 +127,12 @@ def call_openai_compatible_api(api_url, api_key, model, messages, timeout=30):
         raise LittleRoomAPIError("unexpected_error", None, str(e))
 
 def call_gemini_api(api_key, model, system_instruction, chat_history, timeout=30):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    # Sanitize model name (strip and remove models/ prefix if present)
+    clean_model = (model or "gemini-1.5-flash").strip()
+    if clean_model.startswith("models/"):
+        clean_model = clean_model[7:]
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{clean_model}:generateContent?key={api_key}"
     contents = []
     for m in chat_history:
         role = "user" if m["role"] == "user" else "model"
@@ -248,9 +253,9 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
     api_provider = settings.get("api_provider", "offline")
 
     if api_provider == "openai" and settings.get("openai_api_key"):
-        model = settings.get("openai_model", "gpt-4o-mini")
+        model = settings.get("openai_model", "gpt-4o-mini").strip() or "gpt-4o-mini"
         try:
-            api_key = settings["openai_api_key"]
+            api_key = settings["openai_api_key"].strip()
             sys_prompt = JULES_SYSTEM_PROMPT if agent_name == "Jules" else BANH_SYSTEM_PROMPT
             memory_txt = format_memory_context(memories)
 
@@ -281,7 +286,7 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
                 elif err.status_code == 403:
                     notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (403 Forbidden): Không có quyền truy cập hoặc bị giới hạn vùng địa lý/tài khoản."
                 elif err.status_code == 404:
-                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (404 Not Found): Model '{model}' không tồn tại hoặc tài khoản chưa có quyền truy cập."
+                    notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI (404 Not Found): Model '{model}' không tồn tại hoặc tài khoản chưa có quyền truy cập. Chi tiết: {err.message}"
                 else:
                     notice = f"[{agent_name}] ⚠️ Lỗi API OpenAI ({err.status_code} Client Error): {err.message}"
                 return {
@@ -311,9 +316,10 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
             }
 
     elif api_provider == "gemini" and settings.get("gemini_api_key"):
-        model = settings.get("gemini_model", "gemini-1.5-flash")
+        raw_model = settings.get("gemini_model", "gemini-1.5-flash").strip() or "gemini-1.5-flash"
+        model = raw_model[7:] if raw_model.startswith("models/") else raw_model
         try:
-            api_key = settings["gemini_api_key"]
+            api_key = settings["gemini_api_key"].strip()
             sys_prompt = JULES_SYSTEM_PROMPT if agent_name == "Jules" else BANH_SYSTEM_PROMPT
             memory_txt = format_memory_context(memories)
             full_system = f"{sys_prompt}\n\n{memory_txt}"
@@ -342,7 +348,8 @@ def generate_agent_reply(agent_name, user_message, recent_messages, memories, se
                 elif err.status_code == 429:
                     notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (429 Quota Exceeded): Vượt quá hạn ngạch gọi API Gemini."
                 elif err.status_code == 404:
-                    notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (404 Not Found): Model '{model}' không khả dụng."
+                    detail_str = f" - Chi tiết từ Google: {err.message}" if err.message else ""
+                    notice = f"[{agent_name}] ⚠️ Lỗi API Gemini (404 Not Found): Model '{model}' không khả dụng{detail_str}. Huy có thể thử đổi tên model sang 'gemini-1.5-flash-latest' hoặc 'gemini-1.5-pro' trong Cài đặt nhé!"
                 else:
                     notice = f"[{agent_name}] ⚠️ Lỗi API Gemini ({err.status_code}): {err.message}"
                 return {
